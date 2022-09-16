@@ -51,7 +51,9 @@
 #include <drm/drm_bridge.h>
 
 #include "sde_power_handle.h"
-
+#if defined(CONFIG_PXLW_IRIS) || defined(CONFIG_PXLW_SOFT_IRIS)
+#include <drm/msm_drm_iris.h>
+#endif
 #define GET_MAJOR_REV(rev)		((rev) >> 28)
 #define GET_MINOR_REV(rev)		(((rev) >> 16) & 0xFFF)
 #define GET_STEP_REV(rev)		((rev) & 0xFFFF)
@@ -134,6 +136,9 @@ enum msm_mdp_plane_property {
 	PLANE_PROP_PREFILL_TIME,
 	PLANE_PROP_SCALER_V1,
 	PLANE_PROP_SCALER_V2,
+#ifdef OPLUS_FEATURE_DISPLAY
+	PLANE_PROP_CUSTOM,
+#endif /* OPLUS_FEATURE_DISPLAY */
 	PLANE_PROP_INVERSE_PMA,
 	PLANE_PROP_FP16_IGC,
 	PLANE_PROP_FP16_UNMULT,
@@ -177,6 +182,9 @@ enum msm_mdp_crtc_property {
 	CRTC_PROP_ROI_V1,
 	CRTC_PROP_SECURITY_LEVEL,
 	CRTC_PROP_DEST_SCALER,
+#ifdef OPLUS_FEATURE_DISPLAY
+	CRTC_PROP_CUSTOM,
+#endif /* OPLUS_FEATURE_DISPLAY */
 	CRTC_PROP_CAPTURE_OUTPUT,
 
 	CRTC_PROP_IDLE_PC_STATE,
@@ -215,6 +223,9 @@ enum msm_mdp_conn_property {
 	CONNECTOR_PROP_ROI_V1,
 	CONNECTOR_PROP_BL_SCALE,
 	CONNECTOR_PROP_SV_BL_SCALE,
+#ifdef OPLUS_FEATURE_DISPLAY
+	CONNECTOR_PROP_CUSTOM,
+#endif /* OPLUS_FEATURE_DISPLAY */
 	CONNECTOR_PROP_SUPPORTED_COLORSPACES,
 	CONNECTOR_PROP_DYN_BIT_CLK,
 	CONNECTOR_PROP_DIMMING_CTRL,
@@ -231,6 +242,19 @@ enum msm_mdp_conn_property {
 	CONNECTOR_PROP_SET_PANEL_MODE,
 	CONNECTOR_PROP_AVR_STEP,
 	CONNECTOR_PROP_DSC_MODE,
+
+#ifdef OPLUS_FEATURE_DISPLAY
+	CONNECTOR_PROP_QSYNC_MIN_FPS,
+#endif /* OPLUS_FEATURE_DISPLAY */
+
+#if defined(CONFIG_PXLW_IRIS) || defined(CONFIG_PXLW_SOFT_IRIS)
+	CONNECTOR_PROP_PANEL_LEVEL,
+#endif
+
+#ifdef OPLUS_FEATURE_DISPLAY
+	// Prop to store sync panel backlight level
+	CONNECTOR_PROP_SYNC_BACKLIGHT_LEVEL,
+#endif /* OPLUS_FEATURE_DISPLAY */
 
 	/* total # of properties */
 	CONNECTOR_PROP_COUNT
@@ -886,6 +910,9 @@ struct msm_display_kickoff_params {
 struct msm_display_conn_params {
 	uint32_t qsync_mode;
 	bool qsync_update;
+#ifdef OPLUS_FEATURE_DISPLAY
+	uint32_t qsync_dynamic_min_fps;
+#endif /* OPLUS_FEATURE_DISPLAY */
 };
 
 /**
@@ -974,6 +1001,10 @@ struct msm_drm_private {
 	struct msm_drm_thread disp_thread[MAX_CRTCS];
 	struct msm_drm_thread event_thread[MAX_CRTCS];
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	struct msm_drm_thread adfr_thread[MAX_CRTCS];
+#endif /* OPLUS_FEATURE_DISPLAY */
+
 	struct task_struct *pp_event_thread;
 	struct kthread_worker pp_event_worker;
 
@@ -1032,6 +1063,10 @@ struct msm_drm_private {
 
 	struct mutex vm_client_lock;
 	struct list_head vm_client_list;
+
+#ifdef OPLUS_FEATURE_DISPLAY
+	struct mutex dspp_lock;
+#endif /* OPLUS_FEATURE_DISPLAY */
 };
 
 /* get struct msm_kms * from drm_device * */

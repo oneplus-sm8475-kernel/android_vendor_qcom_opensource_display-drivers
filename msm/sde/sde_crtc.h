@@ -446,6 +446,16 @@ enum sde_crtc_dirty_flags {
 	SDE_CRTC_DIRTY_MAX,
 };
 
+#ifdef OPLUS_FEATURE_DISPLAY
+/* Move the struct plane_state to sde_crtc.h */
+struct plane_state {
+       struct sde_plane_state *sde_pstate;
+       const struct drm_plane_state *drm_pstate;
+       int stage;
+       u32 pipe_id;
+};
+#endif /* OPLUS_FEATURE_DISPLAY */
+
 #define to_sde_crtc(x) container_of(x, struct sde_crtc, base)
 
 /**
@@ -524,6 +534,14 @@ struct sde_crtc_state {
 	struct sde_cp_crtc_range_prop_payload
 		cp_range_payload[SDE_CP_CRTC_MAX_FEATURES];
 	bool cont_splash_populated;
+#ifdef OPLUS_FEATURE_DISPLAY
+	bool fingerprint_mode;
+	bool fingerprint_pressed;
+	bool fingerprint_defer_sync;
+	struct sde_hw_dim_layer *fingerprint_dim_layer;
+	bool aod_skip_pcc;
+	bool oha_mode;
+#endif /* OPLUS_FEATURE_DISPLAY */
 };
 
 enum sde_crtc_irq_state {
@@ -993,6 +1011,10 @@ void sde_crtc_misr_setup(struct drm_crtc *crtc, bool enable, u32 frame_count);
  */
 void sde_crtc_get_misr_info(struct drm_crtc *crtc,
 		struct sde_crtc_misr_info *crtc_misr_info);
+
+#ifdef OPLUS_FEATURE_DISPLAY
+struct sde_kms *_sde_crtc_get_kms_(struct drm_crtc *crtc);
+#endif /* OPLUS_FEATURE_DISPLAY */
 
 /**
  * sde_crtc_set_bpp - set src and target bpp values

@@ -43,6 +43,14 @@
 #include "sde_trace.h"
 #include "msm_drv.h"
 #include "sde_vm.h"
+#ifdef OPLUS_FEATURE_DISPLAY
+#include "../oplus/oplus_display_private_api.h"
+#include "../oplus/oplus_onscreenfingerprint.h"
+
+extern int oplus_dimlayer_fingerprint_failcount;
+
+#include "../oplus/oplus_adfr.h"
+#endif /* OPLUS_FEATURE_DISPLAY */
 
 #define SDE_PSTATES_MAX (SDE_STAGE_MAX * 4)
 #define SDE_MULTIRECT_PLANE_MAX (SDE_STAGE_MAX * 2)
@@ -118,6 +126,10 @@ static struct sde_crtc_custom_events custom_events[] = {
 
 #define SKIP_STAGING_PIPE_ZPOS		255
 
+#if defined(CONFIG_PXLW_IRIS) || defined(CONFIG_PXLW_SOFT_IRIS)
+int iris_backlight_update;
+#endif
+
 static void sde_crtc_install_noise_layer_properties(struct sde_crtc *sde_crtc,
 		struct sde_mdss_cfg *catalog, struct sde_kms_info *info);
 static void sde_cp_crtc_apply_noise(struct drm_crtc *crtc,
@@ -139,6 +151,14 @@ static inline struct sde_kms *_sde_crtc_get_kms(struct drm_crtc *crtc)
 
 	return to_sde_kms(priv->kms);
 }
+
+#ifdef OPLUS_FEATURE_DISPLAY
+struct sde_kms *_sde_crtc_get_kms_(struct drm_crtc *crtc)
+{
+	return _sde_crtc_get_kms(crtc);
+}
+EXPORT_SYMBOL(_sde_crtc_get_kms_);
+#endif /* OPLUS_FEATURE_DISPLAY */
 
 /**
  * sde_crtc_calc_fps() - Calculates fps value.
@@ -605,6 +625,10 @@ static void _sde_crtc_setup_blend_cfg(struct sde_crtc_mixer *mixer,
 
 	/* default to opaque blending */
 	fg_alpha = sde_plane_get_property(pstate, PLANE_PROP_ALPHA);
+#ifdef OPLUS_FEATURE_DISPLAY
+	if (pstate->is_skip)
+		fg_alpha = 0;
+#endif /* OPLUS_FEATURE_DISPLAY */
 	bg_alpha = 0xFF - fg_alpha;
 	blend_op = SDE_BLEND_FG_ALPHA_FG_CONST | SDE_BLEND_BG_ALPHA_BG_CONST;
 	blend_type = sde_plane_get_property(pstate, PLANE_PROP_BLEND_OP);
@@ -1191,6 +1215,11 @@ static int _sde_crtc_check_planes_within_crtc_roi(struct drm_crtc *crtc,
 	return 0;
 }
 
+#ifdef OPLUS_FEATURE_DISPLAY
+/* fix pcc abnormal on onscreenfinger scene */
+extern void sde_cp_crtc_pcc_change(struct drm_crtc *crtc_drm);
+#endif /* OPLUS_FEATURE_DISPLAY */
+
 static int _sde_crtc_check_rois(struct drm_crtc *crtc,
 		struct drm_crtc_state *state)
 {
@@ -1309,12 +1338,16 @@ static void _sde_crtc_program_lm_output_roi(struct drm_crtc *crtc)
 		sde_cp_crtc_res_change(crtc);
 }
 
+#ifdef OPLUS_FEATURE_DISPLAY
+/* Move the struct plane_state to sde_crtc.h
 struct plane_state {
 	struct sde_plane_state *sde_pstate;
 	const struct drm_plane_state *drm_pstate;
 	int stage;
 	u32 pipe_id;
 };
+*/
+#endif /* OPLUS_FEATURE_DISPLAY */
 
 static int pstate_cmp(const void *a, const void *b)
 {
@@ -1698,8 +1731,38 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 			for (i = 0; i < cstate->num_dim_layers; i++)
 				_sde_crtc_setup_dim_layer_cfg(crtc, sde_crtc,
 						mixer, &cstate->dim_layer[i]);
-			clear_bit(SDE_CRTC_DIRTY_DIM_LAYERS, cstate->dirty);
+
+#ifdef OPLUS_FEATURE_DISPLAY
+		if (cstate->fingerprint_dim_layer) {
+			bool is_dim_valid = true;
+			uint32_t zpos_max = 0;
+
+			drm_atomic_crtc_for_each_plane(plane, crtc) {
+				state = plane->state;
+				if (!state)
+					continue;
+				pstate = to_sde_plane_state(state);
+
+				if (zpos_max < pstate->stage)
+					zpos_max = pstate->stage;
+				SDE_EVT32(pstate->stage, cstate->fingerprint_dim_layer->stage, zpos_max);
+				if (pstate->stage == cstate->fingerprint_dim_layer->stage) {
+					is_dim_valid = false;
+					oplus_dimlayer_fingerprint_failcount++;
+					SDE_ERROR("Skip fingerprint_dim_layer as it shared plane stage %d %d\n",
+							pstate->stage, cstate->fingerprint_dim_layer->stage);
+					SDE_EVT32(pstate->stage, cstate->fingerprint_dim_layer->stage, zpos_max, oplus_dimlayer_fingerprint_failcount);
+				}
+			}
+			if (is_dim_valid) {
+				SDE_ATRACE_BEGIN("_sde_crtc_setup_dim_layer_cfg");
+				_sde_crtc_setup_dim_layer_cfg(crtc, sde_crtc,
+						mixer, cstate->fingerprint_dim_layer);
+				SDE_ATRACE_END("_sde_crtc_setup_dim_layer_cfg");
+			}
+			}
 		}
+#endif /* OPLUS_FEATURE_DISPLAY */
 	}
 
 end:
@@ -2823,6 +2886,12 @@ static void sde_crtc_frame_event_work(struct kthread_work *work)
 				(fevent->event & SDE_ENCODER_FRAME_EVENT_ERROR)
 				? SDE_FENCE_SIGNAL_ERROR : SDE_FENCE_SIGNAL);
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	if (oplus_adfr_is_support()) {
+		sde_crtc_adfr_handle_frame_event(crtc, fevent);
+	}
+#endif /* OPLUS_FEATURE_DISPLAY */
+
 	if (fevent->event & SDE_ENCODER_FRAME_EVENT_PANEL_DEAD)
 		SDE_ERROR("crtc%d ts:%lld received panel dead event\n",
 				crtc->base.id, ktime_to_ns(fevent->ts));
@@ -2868,6 +2937,21 @@ void sde_crtc_complete_commit(struct drm_crtc *crtc,
 		sde_crtc_event_notify(crtc, DRM_EVENT_CRTC_POWER, &power_on, sizeof(u32));
 
 	sde_core_perf_crtc_update(crtc, 0, false);
+#ifdef OPLUS_FEATURE_DISPLAY
+	if (oplus_ofp_is_support()) {
+		struct sde_crtc_state *old_cstate;
+		struct sde_crtc_state *cstate;
+
+		if (!old_state) {
+			SDE_ERROR("failed to find old cstate");
+			return;
+		}
+		old_cstate = to_sde_crtc_state(old_state);
+		cstate = to_sde_crtc_state(crtc->state);
+
+		oplus_ofp_send_message(old_cstate, cstate, crtc);
+	}
+#endif /* OPLUS_FEATURE_DISPLAY */
 }
 
 /**
@@ -3572,6 +3656,10 @@ static void sde_crtc_atomic_begin(struct drm_crtc *crtc,
 	bool cont_splash_enabled = false;
 	size_t i;
 
+#if defined(CONFIG_PXLW_IRIS) || defined(CONFIG_PXLW_SOFT_IRIS)
+	iris_backlight_update = 1;
+#endif
+
 	if (!crtc) {
 		SDE_ERROR("invalid crtc\n");
 		return;
@@ -3633,7 +3721,7 @@ static void sde_crtc_atomic_begin(struct drm_crtc *crtc,
 	sde_cp_crtc_apply_noise(crtc, old_state);
 
 	if (crtc->state->mode_changed || sde_kms->perf.catalog->uidle_cfg.dirty)
-		sde_core_perf_crtc_update_uidle(crtc, true);
+ 		sde_core_perf_crtc_update_uidle(crtc, true);
 
 	/* update cached_encoder_mask if new conn is added or removed */
 	if (crtc->state->connectors_changed)
@@ -3653,6 +3741,19 @@ static void sde_crtc_atomic_begin(struct drm_crtc *crtc,
 			cont_splash_enabled = true;
 	}
 
+#ifdef OPLUS_FEATURE_DISPLAY
+/* fix pcc abnormal on onscreenfinger scene */
+	if (is_dsi_panel(crtc)) {
+		struct sde_crtc_state *new_sde_state = to_sde_crtc_state(crtc->state);
+		struct sde_crtc_state *old_sde_state = to_sde_crtc_state(old_state);
+
+		if (new_sde_state->fingerprint_mode != old_sde_state->fingerprint_mode
+			|| new_sde_state->aod_skip_pcc != old_sde_state->aod_skip_pcc) {
+			pr_err("oplus_pcc: %s %d\n", __func__, __LINE__);
+			sde_cp_crtc_pcc_change(crtc);
+		}
+	}
+#endif /* OPLUS_FEATURE_DISPLAY */
 	if (sde_kms_is_cp_operation_allowed(sde_kms))
 		sde_cp_crtc_apply_properties(crtc);
 
@@ -5031,6 +5132,7 @@ static int _sde_crtc_check_secure_state(struct drm_crtc *crtc,
 	return 0;
 }
 
+
 static int _sde_crtc_check_get_pstates(struct drm_crtc *crtc,
 		struct drm_crtc_state *state,
 		struct drm_display_mode *mode,
@@ -5285,6 +5387,13 @@ static int _sde_crtc_atomic_check_pstates(struct drm_crtc *crtc,
 	if (rc)
 		return rc;
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	if (oplus_ofp_is_support()) {
+		rc = sde_crtc_onscreenfinger_atomic_check(cstate, pstates, cnt);
+		if (rc)
+			return rc;
+	}
+#endif /* OPLUS_FEATURE_DISPLAY */
 	/* assign mixer stages based on sorted zpos property */
 	rc = _sde_crtc_check_zpos(state, sde_crtc, pstates, cstate, mode, cnt);
 	if (rc)
@@ -5950,6 +6059,10 @@ static void sde_crtc_install_properties(struct drm_crtc *crtc,
 			ARRAY_SIZE(e_secure_level), 0,
 			CRTC_PROP_SECURITY_LEVEL);
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	msm_property_install_range(&sde_crtc->property_info,"CRTC_CUST",
+		0x0, 0, INT_MAX, 0, CRTC_PROP_CUSTOM);
+#endif /* OPLUS_FEATURE_DISPLAY */
 	if (catalog->syscache_supported)
 		msm_property_install_enum(&sde_crtc->property_info, "cache_state",
 			0x0, 0, e_cache_state,
@@ -5959,8 +6072,13 @@ static void sde_crtc_install_properties(struct drm_crtc *crtc,
 	if (catalog->has_dim_layer) {
 		msm_property_install_volatile_range(&sde_crtc->property_info,
 			"dim_layer_v1", 0x0, 0, ~0, 0, CRTC_PROP_DIM_LAYER_V1);
+#ifdef OPLUS_FEATURE_DISPLAY
+		sde_kms_info_add_keyint(info, "dim_layer_v1_max_layers",
+				SDE_MAX_DIM_LAYERS-1);
+#else /* OPLUS_FEATURE_DISPLAY */
 		sde_kms_info_add_keyint(info, "dim_layer_v1_max_layers",
 				SDE_MAX_DIM_LAYERS);
+#endif /* OPLUS_FEATURE_DISPLAY */
 	}
 
 	if (catalog->mdp[0].has_dest_scaler)
@@ -6062,16 +6180,28 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 	int idx, ret;
 	uint64_t fence_user_fd;
 	uint64_t __user prev_user_fd;
+#ifdef OPLUS_FEATURE_DISPLAY
+	struct msm_drm_private *priv;
 
-	if (!crtc || !state || !property) {
+	if (!crtc || !state || !property || !crtc->dev || !crtc->dev->dev_private) {
 		SDE_ERROR("invalid argument(s)\n");
 		return -EINVAL;
 	}
+	priv = crtc->dev->dev_private;
+#else /* OPLUS_FEATURE_DISPLAY */
+        if (!crtc || !state || !property) {
+                SDE_ERROR("invalid argument(s)\n");
+                return -EINVAL;
+        }
+#endif /* OPLUS_FEATURE_DISPLAY */
 
 	sde_crtc = to_sde_crtc(crtc);
 	cstate = to_sde_crtc_state(state);
 
 	SDE_ATRACE_BEGIN("sde_crtc_atomic_set_property");
+#ifdef OPLUS_FEATURE_DISPLAY
+	mutex_lock(&priv->dspp_lock);
+#endif /* OPLUS_FEATURE_DISPLAY */
 	/* check with cp property system first */
 	ret = sde_cp_crtc_set_property(crtc, state, property, val);
 	if (ret != -ENOENT)
@@ -6178,6 +6308,9 @@ exit:
 				property->base.id, val);
 	}
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	mutex_unlock(&priv->dspp_lock);
+#endif /* OPLUS_FEATURE_DISPLAY */
 	SDE_ATRACE_END("sde_crtc_atomic_set_property");
 	return ret;
 }
